@@ -1,0 +1,2 @@
+# appimage-install
+install appimages
