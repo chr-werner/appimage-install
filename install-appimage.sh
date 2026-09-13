@@ -14,10 +14,22 @@
 #                 A directory installs every *.AppImage directly inside it.
 #   --name, -n    override the auto base name (single file only; version is
 #                 still appended). Ignored when installing multiple files.
-#   --category,-c freedesktop menu category (default: Utility), applied to all.
+#   --category,-c freedesktop menu category, applied to all installs and
+#                 overriding any embedded category. Without it, each AppImage's
+#                 own embedded Categories (from its .desktop/AppStream data)
+#                 is used if present, else DEFAULT_CATEGORY (default: Utility).
 #                 e.g. Development Graphics AudioVideo Network Office System
 #   --dry-run     show what would be done without moving files, creating
 #                 symlinks/icons/menu entries, or touching shell rc files.
+#   --config PATH override the config file location (default:
+#                 ~/.config/install-appimage/config).
+#
+# Config file (optional, no edits to this script needed):
+#   ~/.config/install-appimage/config — shell-sourced, sets APP_DIR, BIN_DIR,
+#   DESKTOP_DIR, DEFAULT_CATEGORY, and/or LOG_FILE. See config.example.
+#
+# Logging: every run appends stdout+stderr to LOG_FILE (default:
+#   ~/.local/state/install-appimage/install.log) as well as printing normally.
 #
 # Examples:
 #   ./install-appimage.sh App.AppImage
@@ -32,11 +44,39 @@
 set -euo pipefail
 
 APP_DIR="$HOME/.AppImages"
-ICON_DIR="$APP_DIR/icons"
 BIN_DIR="$HOME/.local/bin"
 DESKTOP_DIR="$HOME/.local/share/applications"
+DEFAULT_CATEGORY="Utility"
+CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/install-appimage/config"
+LOG_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/install-appimage/install.log"
 
 die() { echo "Error: $*" >&2; exit 1; }
+
+# Sanitize an AppImage-supplied Categories value before it goes into a
+# generated .desktop file: strip anything but freedesktop-safe chars,
+# collapse/trim semicolons. AppImages are untrusted input.
+sanitize_categories() {
+    printf '%s' "$1" | tr -d '\n\r' \
+        | sed -E 's/[^A-Za-z0-9;_-]//g; s/;+/;/g; s/^;//; s/;$//'
+}
+
+# ---- config file (optional --config PATH override, parsed before anything
+# else needs APP_DIR/BIN_DIR/DESKTOP_DIR/DEFAULT_CATEGORY) -------------------
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+    if [[ "${args[i]}" == "--config" ]]; then
+        CONFIG_FILE="${args[i+1]:-}"
+        [[ -n "$CONFIG_FILE" ]] || die "--config needs a value"
+        set -- "${args[@]:0:i}" "${args[@]:i+2}"
+        break
+    fi
+done
+if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+fi
+
+ICON_DIR="$APP_DIR/icons"
 
 usage() {
     cat <<'EOF'
@@ -64,16 +104,38 @@ OPTIONS
   -n, --name NAME       Override the auto-detected base name. Single file only;
                         the detected version is still appended. Ignored (with a
                         warning) when more than one AppImage is installed.
-  -c, --category CAT    freedesktop menu category applied to all installs.
-                        Default: Utility. Common values: Development, Graphics,
-                        AudioVideo, Network, Office, System, Utility.
+  -c, --category CAT    freedesktop menu category applied to all installs,
+                        overriding any category embedded in the AppImage.
+                        Without this flag, each AppImage's own embedded
+                        Categories (from its .desktop/AppStream metadata) is
+                        used when present, else DEFAULT_CATEGORY (Utility).
+                        Common values: Development, Graphics, AudioVideo,
+                        Network, Office, System, Utility.
   --dry-run             Show what would be installed/updated/skipped without
                         moving files, creating symlinks/icons/menu entries,
                         or touching shell rc files.
+  --config PATH         Use PATH instead of the default config file location
+                        (~/.config/install-appimage/config).
   --remove NAME         Uninstall. Give the exact id (obsidian-1.5.3) to remove
                         one version; give the base (obsidian) to list installed
                         versions. Leaves the AppImage file in ~/Applications.
   -h, --help            Show this help and exit.
+
+CONFIG FILE
+  ~/.config/install-appimage/config is sourced (shell syntax) if present, so
+  you don't need to edit this script to change defaults. Recognized variables:
+    APP_DIR           install location (default: ~/.AppImages)
+    BIN_DIR           terminal command symlinks (default: ~/.local/bin)
+    DESKTOP_DIR       .desktop entries (default: ~/.local/share/applications)
+    DEFAULT_CATEGORY  default --category value (default: Utility)
+    LOG_FILE          log file path (default: ~/.local/state/install-appimage/install.log)
+  See config.example in this repo. CLI flags always override the config file.
+
+LOGGING
+  Every run's output (stdout+stderr) is printed as before AND appended to
+  LOG_FILE by default, prefixed with a timestamped run header. If the log
+  file/directory can't be written, the script warns and continues without
+  file logging — it never blocks an install over that.
 
 EXAMPLES
   install-appimage.sh App.AppImage
@@ -143,6 +205,15 @@ for a in "$@"; do
     esac
 done
 
+# ---- logging (stdout as before, plus appended to LOG_FILE by default) ------
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+if touch "$LOG_FILE" 2>/dev/null; then
+    printf '\n===== %s install-appimage.sh %s =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE"
+    exec > >(tee -a "$LOG_FILE") 2>&1
+else
+    echo "Note: could not write log file $LOG_FILE; continuing without file logging." >&2
+fi
+
 # ---- uninstall mode -------------------------------------------------------
 if [[ "${1:-}" == "--remove" ]]; then
     name="${2:-}"
@@ -161,7 +232,7 @@ if [[ "${1:-}" == "--remove" ]]; then
         | sed -E 's/\.desktop$//' || true)"
     if [[ -n "$matches" ]]; then
         echo "No exact match for '$name'. Installed versions:"
-        echo "$matches" | sed 's/^/  /'
+        while IFS= read -r m; do echo "  $m"; done <<< "$matches"
         echo "Re-run with the full name, e.g.: $0 --remove $(echo "$matches" | head -n1)"
     else
         echo "Nothing found matching '$name'."
@@ -170,11 +241,11 @@ if [[ "${1:-}" == "--remove" ]]; then
 fi
 
 # ---- install one AppImage -------------------------------------------------
-# install_one <src> <argname-or-empty> <category>
+# install_one <src> <argname-or-empty> <category> <category-explicit-0-or-1>
 install_one() {
-    local src="$1" argname="$2" category="$3"
-    local base tmp extracted meta_name meta_version version vslug
-    local basename_slug name dest icon_path found ext desk appdata display
+    local src="$1" argname="$2" category="$3" category_explicit="$4"
+    local base tmp extracted meta_name meta_version meta_category version vslug
+    local basename_slug name dest icon_path found ext desk appdata display final_category
     local existing_matches installed_versions max_installed ans
 
     [[ -f "$src" ]]      || { echo "Skip: file not found: $src" >&2; return 1; }
@@ -189,25 +260,34 @@ install_one() {
         extracted="$tmp/squashfs-root"
     fi
 
-    # --- read Name and version from embedded metadata ----------------------
+    # --- read Name, version, and category from embedded metadata -----------
     meta_name=""
     meta_version=""
+    meta_category=""
+    appdata=""
     if [[ -n "$extracted" ]]; then
-        # 1) the bundled .desktop file: Name= and (sometimes) X-AppImage-Version=
+        # 1) the bundled .desktop file: Name=, X-AppImage-Version=, Categories=
         desk="$(find "$extracted" -maxdepth 2 -name '*.desktop' 2>/dev/null | head -n1 || true)"
         if [[ -n "$desk" && -f "$desk" ]]; then
             meta_name="$(sed -nE 's/^Name=(.+)$/\1/p' "$desk" | head -n1)"
             meta_version="$(sed -nE 's/^X-AppImage-Version=(.+)$/\1/p' "$desk" | head -n1)"
+            meta_category="$(sed -nE 's/^Categories=(.+)$/\1/p' "$desk" | head -n1)"
         fi
-        # 2) AppStream metainfo XML: <release version="..."> is most reliable
-        if [[ -z "$meta_version" ]]; then
+        # 2) AppStream metainfo XML: most reliable source for version and/or
+        #    category when the .desktop file didn't have one
+        if [[ -z "$meta_version" || -z "$meta_category" ]]; then
             appdata="$(find "$extracted" -path '*/metainfo/*.xml' -o -path '*/appdata/*.xml' 2>/dev/null | head -n1 || true)"
-            if [[ -n "$appdata" && -f "$appdata" ]]; then
-                meta_version="$(grep -oE '<release[^>]+version="[^"]+"' "$appdata" \
-                    | head -n1 | sed -E 's/.*version="([^"]+)".*/\1/')"
-            fi
+        fi
+        if [[ -z "$meta_version" && -n "$appdata" && -f "$appdata" ]]; then
+            meta_version="$(grep -oE '<release[^>]+version="[^"]+"' "$appdata" \
+                | head -n1 | sed -E 's/.*version="([^"]+)".*/\1/')"
+        fi
+        if [[ -z "$meta_category" && -n "$appdata" && -f "$appdata" ]]; then
+            meta_category="$(grep -oE '<category>[^<]+</category>' "$appdata" \
+                | sed -E 's#</?category>##g' | tr '\n' ';')"
         fi
     fi
+    meta_category="$(sanitize_categories "$meta_category")"
 
     # --- version: metadata, else parsed from filename ----------------------
     version="$meta_version"
@@ -327,6 +407,14 @@ install_one() {
     fi
     [[ -n "$version" ]] && display="$display $version"
 
+    # category: explicit --category always wins; otherwise prefer the
+    # AppImage's own embedded category over the default.
+    final_category="$category"
+    if [[ "$category_explicit" -eq 0 && -n "$meta_category" ]]; then
+        final_category="$meta_category"
+        echo "Note: using embedded category '$meta_category' for $display (from AppImage metadata)."
+    fi
+
     # .desktop entry (absolute paths; ~ does not expand here)
     local desktop_file="$DESKTOP_DIR/$name.desktop"
     if [[ $dry_run -eq 1 ]]; then
@@ -339,7 +427,7 @@ Type=Application
 Name=$display
 Exec="$dest" %U
 Icon=$icon_path
-Categories=$category;
+Categories=$final_category;
 Terminal=false
 StartupNotify=true
 EOF
@@ -351,7 +439,8 @@ EOF
 }
 
 # ---- argument parsing (single or batch) -----------------------------------
-category="Utility"
+category="$DEFAULT_CATEGORY"
+category_explicit=0
 argname=""
 dry_run=0
 targets=()
@@ -359,7 +448,8 @@ targets=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --category|-c)
-            category="${2:-}"; [[ -n "$category" ]] || die "--category needs a value"; shift 2 ;;
+            category="${2:-}"; [[ -n "$category" ]] || die "--category needs a value"
+            category_explicit=1; shift 2 ;;
         --name|-n)
             argname="${2:-}"; [[ -n "$argname" ]] || die "--name needs a value"; shift 2 ;;
         --dry-run)
@@ -395,7 +485,7 @@ fi
 
 ok=0; fail=0
 for f in "${expanded[@]}"; do
-    if install_one "$f" "$argname" "$category"; then
+    if install_one "$f" "$argname" "$category" "$category_explicit"; then
         ok=$((ok+1))
     else
         fail=$((fail+1))

@@ -1,0 +1,25 @@
+# install-appimage.sh config file
+#
+# Copy this to: ~/.config/install-appimage/config
+# (or point --config at a different path)
+#
+# Shell-sourced, so plain KEY=value assignments. Uncomment and edit any of
+# these; anything left commented keeps the script's built-in default.
+# CLI flags (e.g. --category) always override values set here.
+
+# Where AppImages get moved to.
+#APP_DIR="$HOME/.AppImages"
+
+# Where the short terminal-command symlinks go. Must be on your PATH.
+#BIN_DIR="$HOME/.local/bin"
+
+# Where .desktop (start menu) entries get written.
+#DESKTOP_DIR="$HOME/.local/share/applications"
+
+# Default freedesktop menu category when --category isn't given.
+# e.g. Development Graphics AudioVideo Network Office System Utility
+#DEFAULT_CATEGORY="Utility"
+
+# Where run output (stdout+stderr) gets appended, in addition to the
+# terminal, on every run.
+#LOG_FILE="$HOME/.local/state/install-appimage/install.log"
