@@ -260,6 +260,7 @@ fi
 if [[ "${1:-}" == "--list" ]]; then
     filter="${2:-}"
     declare -A apps   # basename -> newline-separated "version|id" entries
+    found_any=0
 
     while IFS= read -r f; do
         [[ -f "$f" ]] || continue
@@ -272,9 +273,10 @@ if [[ "${1:-}" == "--list" ]]; then
         fi
         [[ -n "$filter" && "$app_base" != "$filter" ]] && continue
         apps["$app_base"]+="${app_ver:-?}|$id"$'\n'
+        found_any=1
     done < <(find "$DESKTOP_DIR" -maxdepth 1 -name '*.desktop' 2>/dev/null | sort)
 
-    if [[ ${#apps[@]} -eq 0 ]]; then
+    if [[ $found_any -eq 0 ]]; then
         if [[ -n "$filter" ]]; then
             echo "Nothing installed matching '$filter'."
         else
@@ -283,13 +285,13 @@ if [[ "${1:-}" == "--list" ]]; then
         exit 0
     fi
 
-    for app_base in $(printf '%s\n' "${!apps[@]}" | sort); do
+    while IFS= read -r app_base; do
         echo "$app_base"
         while IFS='|' read -r app_ver id; do
             [[ -n "$id" ]] || continue
             echo "  $app_ver  ($id)"
         done <<< "${apps[$app_base]}"
-    done
+    done < <(printf '%s\n' "${!apps[@]}" | sort)
     exit 0
 fi
 

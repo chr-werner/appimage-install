@@ -1,6 +1,24 @@
 # appimage-install
 install appimages
 
+## Setup (run it from anywhere)
+
+```
+git clone https://github.com/chr-werner/appimage-install.git
+cd appimage-install
+chmod +x install-appimage.sh
+ln -s "$(pwd)/install-appimage.sh" ~/.local/bin/install-appimage
+```
+
+A symlink (not a copy) so `git pull` updates apply automatically. Make sure
+`~/.local/bin` is on your `PATH` (open a new terminal if you just added it —
+same PATH caveat the script itself handles for apps it installs). After that,
+run it as `install-appimage` from any directory:
+
+```
+install-appimage ~/Downloads/App.AppImage
+```
+
 ## Usage
 
 ```
@@ -52,3 +70,7 @@ never blocks an install.
 ## CI
 
 `.github/workflows/shellcheck.yml` runs ShellCheck on every push/PR.
+
+`.github/workflows/release.yml` auto-cuts a GitHub Release (tag `vX.Y.Z`,
+generated notes, script + config example attached) whenever `SCRIPT_VERSION`
+in `install-appimage.sh` is bumped on `main`.

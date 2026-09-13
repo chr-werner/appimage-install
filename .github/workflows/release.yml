@@ -1,0 +1,48 @@
+name: Release
+
+# Auto-cuts a GitHub Release when SCRIPT_VERSION in install-appimage.sh is
+# bumped on main. Safe to re-run: skips if the tag already exists.
+#
+# NOTE: if the `SCRIPT_VERSION="X.Y.Z"` declaration in install-appimage.sh
+# ever changes format, update the grep pattern in the "Detect version" step.
+
+on:
+  push:
+    branches: [main]
+    paths: ["install-appimage.sh"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Detect version
+        id: version
+        run: |
+          version="$(grep -oP 'SCRIPT_VERSION="\K[^"]+' install-appimage.sh)"
+          if [[ -z "$version" ]]; then
+            echo "::error::could not find SCRIPT_VERSION in install-appimage.sh"
+            exit 1
+          fi
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create release if new
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, skipping."
+            exit 0
+          fi
+          gh release create "$TAG" \
+            install-appimage.sh config.example README.md \
+            --title "$TAG" \
+            --generate-notes
