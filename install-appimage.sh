@@ -23,6 +23,7 @@
 #                 symlinks/icons/menu entries, or touching shell rc files.
 #   --config PATH override the config file location (default:
 #                 ~/.config/install-appimage/config).
+#   -v, --version print this script's own version and exit.
 #
 # Config file (optional, no edits to this script needed):
 #   ~/.config/install-appimage/config — shell-sourced, sets APP_DIR, BIN_DIR,
@@ -40,9 +41,14 @@
 # Uninstall:
 #   ./install-appimage.sh --remove obsidian-1.5.3   # exact
 #   ./install-appimage.sh --remove obsidian         # lists installed versions
+#
+# List installed apps/versions:
+#   ./install-appimage.sh --list             # every installed app
+#   ./install-appimage.sh --list obsidian    # just that app's installed versions
 
 set -euo pipefail
 
+SCRIPT_VERSION="1.1.0"
 APP_DIR="$HOME/.AppImages"
 BIN_DIR="$HOME/.local/bin"
 DESKTOP_DIR="$HOME/.local/share/applications"
@@ -92,7 +98,9 @@ obsidian-1.5.3) so multiple versions of one app coexist without overwriting.
 USAGE
   install-appimage.sh [OPTIONS] <target> ...
   install-appimage.sh --remove <name>
+  install-appimage.sh --list [basename]
   install-appimage.sh -h | --help
+  install-appimage.sh -v | --version
 
 TARGETS
   One or more of:
@@ -119,7 +127,12 @@ OPTIONS
   --remove NAME         Uninstall. Give the exact id (obsidian-1.5.3) to remove
                         one version; give the base (obsidian) to list installed
                         versions. Leaves the AppImage file in ~/Applications.
+  --list [BASENAME]     List every installed app and its installed version(s).
+                        Give a basename (obsidian) to filter to just that app.
+                        Entries installed before this feature existed show as
+                        "legacy entry" (reinstall to get clean version tracking).
   -h, --help            Show this help and exit.
+  -v, --version         Print this script's own version and exit.
 
 CONFIG FILE
   ~/.config/install-appimage/config is sourced (shell syntax) if present, so
@@ -145,6 +158,8 @@ EXAMPLES
   install-appimage.sh --dry-run ~/Downloads/*.AppImage
   install-appimage.sh --remove obsidian-1.5.3
   install-appimage.sh --remove obsidian
+  install-appimage.sh --list
+  install-appimage.sh --list obsidian
 
 NOTES
   - ~/.local/bin is added to your shell's rc file (bash/zsh/fish) if missing;
@@ -198,10 +213,11 @@ ensure_path() {
     fi
 }
 
-# ---- help -----------------------------------------------------------------
+# ---- help / version --------------------------------------------------------
 for a in "$@"; do
     case "$a" in
         -h|--help) usage; exit 0 ;;
+        -v|--version) echo "install-appimage.sh $SCRIPT_VERSION"; exit 0 ;;
     esac
 done
 
@@ -237,6 +253,43 @@ if [[ "${1:-}" == "--remove" ]]; then
     else
         echo "Nothing found matching '$name'."
     fi
+    exit 0
+fi
+
+# ---- list installed apps/versions mode -------------------------------------
+if [[ "${1:-}" == "--list" ]]; then
+    filter="${2:-}"
+    declare -A apps   # basename -> newline-separated "version|id" entries
+
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        id="$(basename "$f" .desktop)"
+        app_base="$(sed -nE 's/^X-AppImage-Basename=(.+)$/\1/p' "$f" | head -n1)"
+        app_ver="$(sed -nE 's/^X-AppImage-Upstream-Version=(.+)$/\1/p' "$f" | head -n1)"
+        if [[ -z "$app_base" ]]; then
+            app_base="$id"
+            app_ver="legacy entry — reinstall for version tracking"
+        fi
+        [[ -n "$filter" && "$app_base" != "$filter" ]] && continue
+        apps["$app_base"]+="${app_ver:-?}|$id"$'\n'
+    done < <(find "$DESKTOP_DIR" -maxdepth 1 -name '*.desktop' 2>/dev/null | sort)
+
+    if [[ ${#apps[@]} -eq 0 ]]; then
+        if [[ -n "$filter" ]]; then
+            echo "Nothing installed matching '$filter'."
+        else
+            echo "Nothing installed."
+        fi
+        exit 0
+    fi
+
+    for app_base in $(printf '%s\n' "${!apps[@]}" | sort); do
+        echo "$app_base"
+        while IFS='|' read -r app_ver id; do
+            [[ -n "$id" ]] || continue
+            echo "  $app_ver  ($id)"
+        done <<< "${apps[$app_base]}"
+    done
     exit 0
 fi
 
@@ -430,6 +483,8 @@ Icon=$icon_path
 Categories=$final_category;
 Terminal=false
 StartupNotify=true
+X-AppImage-Basename=$basename_slug
+X-AppImage-Upstream-Version=$version
 EOF
         echo "Menu entry        -> $desktop_file"
         echo "Done: '$name'  (launch in a new terminal, or find '$display' in the menu)."

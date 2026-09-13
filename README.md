@@ -6,9 +6,15 @@ install appimages
 ```
 ./install-appimage.sh [--name NAME] [--category CAT] [--dry-run] <target> ...
 ./install-appimage.sh --remove NAME
+./install-appimage.sh --list [BASENAME]
+./install-appimage.sh --version
 ```
 
 Run `./install-appimage.sh --help` for full details.
+
+`--list` shows every installed app and its installed version(s) (or filter to
+one app: `--list obsidian`). Entries installed before this feature existed
+show as "legacy entry" — reinstall them to get clean version tracking.
 
 ## Menu category
 
